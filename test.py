@@ -3,6 +3,8 @@ from tkinter import ttk, messagebox
 import mysql.connector
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import base64
+from io import BytesIO
 
 # Подключение к базе данных
 def connect_to_db():
@@ -114,6 +116,35 @@ def show_data(frame, query, columns, table_name):
     except mysql.connector.Error as err:
         messagebox.showerror("Ошибка", f"Ошибка при загрузке данных: {err}")
 
+def show_photo(photo_data):
+    if photo_data:
+        try:
+            # Декодируем изображение из base64
+            image_data = base64.b64decode(photo_data)
+            photo = tk.PhotoImage(data=image_data)
+
+            photo = photo.subsample(2, 2)
+
+            # Отображаем изображение в Label
+            photo_label = tk.Label(photo_frame, image=photo)
+            photo_label.image = photo  # Сохраняем ссылку на изображение
+            photo_label.pack(pady=10)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось загрузить изображение: {e}")
+    else:
+        tk.Label(photo_frame, text="Фотография отсутствует", bg="#ecf0f1").pack(pady=10)
+
+# Функция для загрузки фотографии
+def upload_photo():
+    from tkinter import filedialog
+    file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png")])
+    if file_path:
+        with open(file_path, "rb") as file:
+            photo_data = base64.b64encode(file.read()).decode('utf-8')
+        cursor.execute("UPDATE Motorcycles SET Photo = %s WHERE Motorcycle_ID = %s", (photo_data, selected_motorcycle[0]))
+        conn.commit()
+        show_photo(photo_data)
+        messagebox.showinfo("Успех", "Фотография успешно загружена")
 
 # Словарь связей между таблицами
 related_fields = {
@@ -216,7 +247,8 @@ def add_data(frame, columns, table_name):
             if columns[i + 1] in ["Quantity_For_Assembly", "Stock_Quantity", "Minimum_Stock", "Price"]:
                 if isinstance(values[i], str) and values[i].replace('.', '', 1).isdigit():
                     if float(values[i]) < 0:
-                        messagebox.showerror("Ошибка", f"Значение в столбце '{columns[i + 1]}' не может быть отрицательным.")
+                        messagebox.showerror("Ошибка",
+                                             f"Значение в столбце '{columns[i + 1]}' не может быть отрицательным.")
                         return
 
         if table_name == "Motorcycle_Parts" and part_id and quantity_for_assembly:
@@ -224,7 +256,8 @@ def add_data(frame, columns, table_name):
                 cursor.execute(f"SELECT Stock_Quantity FROM Stock WHERE Part_ID = %s", (part_id,))
                 current_stock = cursor.fetchone()[0]
                 if quantity_for_assembly > current_stock:
-                    messagebox.showerror("Ошибка", f"На складе недостаточно деталей с ID {part_id}. Доступно {current_stock} шт.")
+                    messagebox.showerror("Ошибка",
+                                         f"На складе недостаточно деталей с ID {part_id}. Доступно {current_stock} шт.")
                     entry_window.destroy()
                     return
                 new_stock = current_stock - quantity_for_assembly
@@ -233,7 +266,8 @@ def add_data(frame, columns, table_name):
                 cursor.execute(f"SELECT Minimum_Stock FROM Stock WHERE Part_ID = %s", (part_id,))
                 min_stock = cursor.fetchone()[0]
                 if new_stock <= min_stock:
-                    messagebox.showwarning("Предупреждение", f"На складе минимальный уровень запаса для детали с ID {part_id}")
+                    messagebox.showwarning("Предупреждение",
+                                           f"На складе минимальный уровень запаса для детали с ID {part_id}")
             except mysql.connector.Error as err:
                 messagebox.showerror("Ошибка", f"Не удалось обновить данные на складе: {err}")
 
@@ -245,6 +279,10 @@ def add_data(frame, columns, table_name):
             print(f"Data saved to {table_name}")  # Отладка
             entry_window.destroy()
             show_data(frame, f"SELECT * FROM {table_name}", columns, table_name)
+
+            # После добавления данных, обновляем фрейм с мотоциклами
+            if table_name == "Motorcycles":
+                show_motorcycles()  # Перезагружаем фрейм с мотоциклами
         except mysql.connector.Error as err:
             messagebox.showerror("Ошибка", f"Не удалось добавить запись: {err}")
             entry_window.destroy()
@@ -252,16 +290,24 @@ def add_data(frame, columns, table_name):
     tk.Button(entry_window, text="Сохранить", command=save_data, bg="#2ecc71", fg="white", relief="flat",
               font=("Helvetica", 12), width=20).pack(pady=10)
 
+
 def edit_data(frame, tree, columns, table_name):
     selected_item = tree.selection()
     if not selected_item:
         messagebox.showerror("Ошибка", "Выберите запись для редактирования.")
         return
     values = tree.item(selected_item[0])['values']
+
+    # Проверка, что количество значений совпадает с количеством столбцов
+    if len(values) != len(columns):
+        messagebox.showerror("Ошибка", "Количество значений не совпадает с количеством столбцов.")
+        return
+
     entry_values = []
     entry_window = tk.Toplevel(root)
     entry_window.title("Редактировать запись")
     entry_window.configure(bg="#ecf0f1")
+
     for i, col in enumerate(columns):
         tk.Label(entry_window, text=col, bg="#ecf0f1", font=("Helvetica", 10)).pack(pady=5)
         if i == 0:
@@ -294,27 +340,31 @@ def edit_data(frame, tree, columns, table_name):
                 new_values.append(value)
 
             if columns[i] in ["Quantity_For_Assembly", "Stock_Quantity", "Minimum_Stock", "Price"]:
-                if isinstance(new_values[i-1], str) and new_values[i-1].replace('.', '', 1).isdigit():
-                    if float(new_values[i-1]) < 0:
-                        messagebox.showerror("Ошибка", f"Значение в столбце '{columns[i]}' не может быть отрицательным.")
+                if isinstance(new_values[i - 1], str) and new_values[i - 1].replace('.', '', 1).isdigit():
+                    if float(new_values[i - 1]) < 0:
+                        messagebox.showerror("Ошибка",
+                                             f"Значение в столбце '{columns[i]}' не может быть отрицательным.")
                         return
 
         if table_name == "Motorcycle_Parts" and part_id and quantity_for_assembly:
             try:
-                cursor.execute(f"SELECT Quantity_For_Assembly FROM Motorcycle_Parts WHERE Motorcycle_Parts_ID = %s", (values[0],))
+                cursor.execute(f"SELECT Quantity_For_Assembly FROM Motorcycle_Parts WHERE Motorcycle_Parts_ID = %s",
+                               (values[0],))
                 old_quantity_for_assembly = cursor.fetchone()[0]
                 cursor.execute(f"SELECT Stock_Quantity FROM Stock WHERE Part_ID = %s", (part_id,))
                 current_stock = cursor.fetchone()[0]
                 new_stock = current_stock + old_quantity_for_assembly - quantity_for_assembly
                 if quantity_for_assembly > current_stock + old_quantity_for_assembly:
-                    messagebox.showerror("Ошибка", f"На складе недостаточно деталей с ID {part_id}. Доступно {current_stock} шт.")
+                    messagebox.showerror("Ошибка",
+                                         f"На складе недостаточно деталей с ID {part_id}. Доступно {current_stock} шт.")
                     return
                 cursor.execute(f"UPDATE Stock SET Stock_Quantity = %s WHERE Part_ID = %s", (new_stock, part_id))
                 conn.commit()
                 cursor.execute(f"SELECT Minimum_Stock FROM Stock WHERE Part_ID = %s", (part_id,))
                 min_stock = cursor.fetchone()[0]
                 if new_stock <= min_stock:
-                    messagebox.showwarning("Предупреждение", f"На складе минимальный уровень запаса для детали с ID {part_id}")
+                    messagebox.showwarning("Предупреждение",
+                                           f"На складе минимальный уровень запаса для детали с ID {part_id}")
             except mysql.connector.Error as err:
                 messagebox.showerror("Ошибка", f"Не удалось обновить данные на складе: {err}")
 
@@ -325,6 +375,10 @@ def edit_data(frame, tree, columns, table_name):
             conn.commit()
             entry_window.destroy()
             show_data(frame, f"SELECT * FROM {table_name}", columns, table_name)
+
+            # После обновления данных, обновляем фрейм с фотографией
+            if table_name == "Motorcycles":
+                show_motorcycles()  # Перезагружаем фрейм с мотоциклами
         except mysql.connector.Error as err:
             messagebox.showerror("Ошибка", f"Не удалось обновить запись: {err}")
             entry_window.destroy()
@@ -377,10 +431,13 @@ def delete_data(frame, tree, columns, table_name):
         cursor.execute(query, (values[0],))
         conn.commit()
         show_data(frame, f"SELECT * FROM {table_name}", columns, table_name)
+
+        # После удаления данных, обновляем фрейм с мотоциклами
+        if table_name == "Motorcycles":
+            show_motorcycles()  # Перезагружаем фрейм с мотоциклами
     except mysql.connector.Error as err:
         messagebox.showerror("Ошибка", f"Не удалось удалить запись: {err}")
         print(f"Error details: {err}")  # Отладочное сообщение
-
 
 # Функции отображения данных по таблицам
 def show_suppliers():
@@ -392,7 +449,125 @@ def show_stock():
     switch_frame(frames['stock'])
 
 def show_motorcycles():
-    show_data(frames['motorcycles'], "SELECT * FROM Motorcycles", ["Motorcycle_ID", "Model", "Color", "Category", "Photo"], "Motorcycles")
+    # Очистка предыдущего содержимого фрейма
+    for widget in frames['motorcycles'].winfo_children():
+        widget.destroy()
+
+    # Основной фрейм для таблицы
+    table_frame = tk.Frame(frames['motorcycles'], bg="#ecf0f1")
+    table_frame.pack(side="top", fill="both", expand=True)
+
+    # Фрейм для фотографии (внизу) - увеличенная высота
+    global photo_frame
+    photo_frame = tk.Frame(frames['motorcycles'], bg="#ecf0f1", height=250)  # Увеличиваем высоту фрейма
+    photo_frame.pack(side="bottom", fill="x")
+
+    # Таблица с данными
+    tree = ttk.Treeview(table_frame, columns=["Motorcycle_ID", "Model", "Color", "Category"], show="headings")
+    tree.heading("Motorcycle_ID", text="ID")
+    tree.heading("Model", text="Модель")
+    tree.heading("Color", text="Цвет")
+    tree.heading("Category", text="Категория")
+
+    tree.column("Motorcycle_ID", width=50)
+    tree.column("Model", width=150)
+    tree.column("Color", width=100)
+    tree.column("Category", width=100)
+
+    tree.pack(expand=True, fill="both")
+
+    # Заполнение таблицы данными
+    cursor.execute("SELECT Motorcycle_ID, Model, Color, Category, Photo FROM Motorcycles")
+    results = cursor.fetchall()
+
+    for row in results:
+        tree.insert("", "end", values=row[:4])
+
+    # Глобальная переменная для хранения выбранного мотоцикла
+    global selected_motorcycle
+    selected_motorcycle = None
+
+    # Функция для отображения фотографии
+    def show_photo(photo_data):
+        for widget in photo_frame.winfo_children():
+            widget.destroy()
+
+        if photo_data:
+            try:
+                # Декодируем изображение из base64
+                image_data = base64.b64decode(photo_data)
+                photo = tk.PhotoImage(data=image_data)
+
+                # Задаем статичный размер для изображения
+                target_width = 400  # Ширина изображения
+                target_height = 225  # Высота изображения
+
+                # Масштабируем изображение до заданных размеров
+                photo = photo.subsample(
+                    max(1, photo.width() // target_width),
+                    max(1, photo.height() // target_height)
+                )
+
+                # Отображаем изображение в Label
+                photo_label = tk.Label(photo_frame, image=photo)
+                photo_label.image = photo  # Сохраняем ссылку на изображение
+                photo_label.pack(pady=10)
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось загрузить изображение: {e}")
+        else:
+            tk.Label(photo_frame, text="Фотография отсутствует", bg="#ecf0f1").pack(pady=10)
+
+    # Обработка выбора мотоцикла
+    def on_select(event):
+        selected_item = tree.selection()
+        if selected_item:
+            global selected_motorcycle
+            selected_motorcycle = tree.item(selected_item[0])['values']
+            cursor.execute("SELECT Photo FROM Motorcycles WHERE Motorcycle_ID = %s", (selected_motorcycle[0],))
+            photo_data = cursor.fetchone()[0]
+            show_photo(photo_data)
+
+    tree.bind("<<TreeviewSelect>>", on_select)
+
+    # Фрейм для кнопок
+    button_frame = tk.Frame(frames['motorcycles'], bg="#ecf0f1")
+    button_frame.pack(side="top", fill="x")
+
+    # Кнопки для взаимодействия с таблицей
+    if user_role == "Директор":
+        tk.Button(button_frame, text="Добавить", command=lambda: add_data(frames['motorcycles'], ["Motorcycle_ID", "Model", "Color", "Category"], "Motorcycles"), bg="#3498db", fg="white", relief="flat",
+                  font=("Helvetica", 12), width=15).pack(side="left", padx=5, pady=5)
+        tk.Button(button_frame, text="Редактировать", command=lambda: edit_data(frames['motorcycles'], tree, ["Motorcycle_ID", "Model", "Color", "Category"], "Motorcycles"), bg="#f39c12", fg="white", relief="flat",
+                  font=("Helvetica", 12), width=15).pack(side="left", padx=5, pady=5)
+        tk.Button(button_frame, text="Удалить", command=lambda: delete_data(frames['motorcycles'], tree, ["Motorcycle_ID", "Model", "Color", "Category"], "Motorcycles"), bg="#e74c3c", fg="white", relief="flat",
+                  font=("Helvetica", 12), width=15).pack(side="left", padx=5, pady=5)
+    elif user_role == "Сотрудник":
+        tk.Button(button_frame, text="Добавить", command=lambda: add_data(frames['motorcycles'], ["Motorcycle_ID", "Model", "Color", "Category"], "Motorcycles"), bg="#3498db", fg="white", relief="flat",
+                  font=("Helvetica", 12), width=15).pack(side="left", padx=5, pady=5)
+        tk.Button(button_frame, text="Редактировать", command=lambda: edit_data(frames['motorcycles'], tree, ["Motorcycle_ID", "Model", "Color", "Category"], "Motorcycles"), bg="#f39c12", fg="white", relief="flat",
+                  font=("Helvetica", 12), width=15).pack(side="left", padx=5, pady=5)
+
+    # Кнопка для загрузки фотографии
+    def upload_photo():
+        if selected_motorcycle is None:
+            messagebox.showerror("Ошибка", "Сначала выберите мотоцикл из таблицы.")
+            return
+
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png")])
+        if file_path:
+            with open(file_path, "rb") as file:
+                photo_data = base64.b64encode(file.read()).decode('utf-8')
+            cursor.execute("UPDATE Motorcycles SET Photo = %s WHERE Motorcycle_ID = %s", (photo_data, selected_motorcycle[0]))
+            conn.commit()
+            show_photo(photo_data)
+            messagebox.showinfo("Успех", "Фотография успешно загружена")
+
+    upload_button = tk.Button(button_frame, text="Загрузить фото", command=upload_photo, bg="#3498db", fg="white", relief="flat",
+                              font=("Helvetica", 12))
+    upload_button.pack(pady=10)
+
+    # Переключение на фрейм с мотоциклами
     switch_frame(frames['motorcycles'])
 
 def show_assembly():
@@ -620,7 +795,7 @@ def main_menu():
                   font=("Helvetica", 10), width=16).pack(side="left", padx=5, pady=5)
         tk.Button(menu_frame, text="Детали мотоциклов", command=show_motorcycle_parts, bg="#2980b9", fg="white", relief="flat",
                   font=("Helvetica", 10), width=16).pack(side="left", padx=5, pady=5)
-        tk.Button(menu_frame, text="Домой", command=show_current_assembly, bg="#2c3e50", fg="white",
+        tk.Button(menu_frame, text="Домой", command=show_current_assembly, bg="#66CD00", fg="white",
                   relief="flat").pack(side="left", padx=10, pady=5)
         tk.Button(menu_frame, text="Выход", command=close_application, bg="#e74c3c", fg="white", relief="flat",
                   font=("Helvetica", 10), width=9).pack(side="right", padx=5, pady=5)
